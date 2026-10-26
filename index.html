@@ -1,0 +1,127 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IA (Expenses)</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg"><meta name="theme-color" content="#0f766e">
+<style>
+:root{--bg:#f4f6f8;--c:#fff;--t:#14202b;--m:#64748b;--p:#0f766e;--b:#e2e8f0;--r:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#0e141b;--c:#18212b;--t:#e6edf3;--m:#8b9bab;--p:#2dd4bf;--b:#2a3644;--r:#f87171}}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--t);padding-bottom:70px}
+header{background:#0f766e;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px;padding-top:max(12px,env(safe-area-inset-top))}
+header img{width:34px;height:34px;border-radius:8px}header b{font-size:17px}header small{opacity:.8;display:block;font-size:11px}
+main{padding:12px;max-width:720px;margin:auto}.card{background:var(--c);border:1px solid var(--b);border-radius:14px;padding:14px;margin-bottom:12px}
+h3{margin:0 0 10px;font-size:15px}.big{font-size:28px;font-weight:700}.m{color:var(--m);font-size:13px}
+input,select,textarea,button{font:inherit;padding:10px;border-radius:10px;border:1px solid var(--b);background:var(--c);color:var(--t);width:100%;margin:4px 0}
+button{background:var(--p);color:#fff;border:0;font-weight:600;cursor:pointer}button.s{background:var(--b);color:var(--t)}button.d{background:var(--r)}
+.row{display:flex;gap:8px}.row>*{flex:1}.tx{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--b)}
+.tx:last-child{border:0}.tx button{width:auto;padding:4px 9px;margin:0 0 0 4px;font-size:12px}.amt{font-weight:700}
+nav{position:fixed;bottom:0;left:0;right:0;background:var(--c);border-top:1px solid var(--b);display:flex;padding-bottom:env(safe-area-inset-bottom)}
+nav a{flex:1;text-align:center;padding:10px 2px;font-size:12px;color:var(--m);cursor:pointer}nav a.on{color:var(--p);font-weight:700}
+.bar{height:8px;background:var(--b);border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--p)}
+canvas{width:100%;height:auto}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+</style></head><body>
+<header><img src="icon.svg" alt=""><div><b>IA (Expenses)</b><small>Family expense manager · offline</small></div></header>
+<main id="app"></main><nav id="nav"></nav>
+<script>
+const VER='1.0.0',K='ia_exp_v1',COL=['#0f766e','#f59e0b','#3b82f6','#ef4444','#8b5cf6','#10b981','#ec4899','#64748b'];
+const CATS=['Groceries & Essentials','Medical & Healthcare','Travel & Commute','Food & Dining','Bills & Utilities','Education','Rent & Home','Other'];
+const RULES=[['IGNORE (Investment)',/\bsip\b|mutual fund|groww|zerodha|\bnps\b|\bppf\b|\bjar\b|gold|silver/i],
+['IGNORE (Transfer)',/self transfer|sent to family|family group/i],
+['Groceries & Essentials',/sabji|vegetable|kirana|supermart|blinkit|instamart|flipkart|amazon|myntra/i],
+['Medical & Healthcare',/medicals?|chemist|pharma|apollo|clinic/i],
+['Travel & Commute',/\bauto\b|rickshaw|yatri|metro|uber|\bola\b/i],
+['Food & Dining',/swiggy|zomato|dhaba|restaurant|bakery/i]];
+let db=JSON.parse(localStorage.getItem(K)||'null'),tab='dash',ym=new Date().toISOString().slice(0,7),yr=ym.slice(0,4),edit=null,flash='',smsTxt='',swReg=null;
+const NP=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.IaNative,REPO='YOUR_USER/ia-expenses',save=()=>{localStorage.setItem(K,JSON.stringify(db));NP&&NP.setData({json:JSON.stringify(db)}).catch(()=>{})},$=s=>document.querySelector(s),inr=n=>'₹'+Math.round(n).toLocaleString('en-IN');
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7),today=()=>new Date().toISOString().slice(0,10);
+const norm=s=>(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const key=t=>t.ref?'r'+t.ref:t.date+'|'+Math.round(t.amt*100)+'|'+norm(t.note).slice(0,12);
+const live=()=>db.tx.filter(t=>!db.del[t.id]);
+const dupOf=t=>live().find(x=>x.id!==t.id&&key(x)===key(t));
+const sumBy=(l,f)=>l.reduce((o,t)=>(o[f(t)]=(o[f(t)]||0)+t.amt,o),{});
+function classify(s){for(const[c,r]of RULES)if(r.test(s))return c;return'Other'}
+function parseSMS(s,dt){
+ if(!/debited|spent|paid|sent|withdrawn|purchase|payment of/i.test(s)||/credited|received/i.test(s)&&!/debited/i.test(s))return{skip:'Not a debit message'};
+ const a=s.match(/(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d+)?)/i);if(!a)return{skip:'No amount found'};
+ const cat=classify(s);if(cat.startsWith('IGNORE'))return{skip:cat};
+ const m=s.match(/(?:\bto|\bat|trf to|info[:\-]?)\s+([A-Za-z0-9 &._@-]{3,30})/i),r=s.match(/(?:ref(?:erence)?(?: no)?\.?|upi|txn)[:.\s-]*(\d{8,})/i);
+ return{t:{id:uid(),date:dt||today(),amt:parseFloat(a[1].replace(/,/g,'')),cat,note:(m?m[1].trim():'SMS expense'),by:db.me,ref:r?r[1]:'',upd:Date.now(),src:'sms'}}}
+function addTx(t){const d=dupOf(t);if(d)return false;db.tx.push(t);save();return true}
+function merge(o){let n=0,u=0;Object.assign(db.del,o.del||{});
+ for(const t of o.tx||[]){const x=db.tx.find(y=>y.id===t.id);if(x){if(t.upd>x.upd){Object.assign(x,t);u++}}else if(!dupOf(t)){db.tx.push(t);n++}}
+ if(!db.fam.length||(o.fam&&!db.fam.some(f=>f.name))) db.fam=o.fam||db.fam;if(!db.name)db.name=o.name;if(!db.budget)db.budget=o.budget;if(!db.me&&db.fam.length)db.me=db.fam[0].id;
+ save();return{n,u}}
+/* charts */
+function pie(id,data){const c=$('#'+id);if(!c)return;const x=c.getContext('2d'),e=Object.entries(data).sort((a,b)=>b[1]-a[1]),T=e.reduce((s,a)=>s+a[1],0);
+ c.width=300;c.height=200;if(!T){x.fillStyle='#888';x.fillText('No data',120,100);return}
+ let a=-Math.PI/2;e.forEach(([k,v],i)=>{x.beginPath();x.moveTo(100,100);x.arc(100,100,90,a,a+=v/T*2*Math.PI);x.fillStyle=COL[i%8];x.fill()});
+ x.globalCompositeOperation='destination-out';x.beginPath();x.arc(100,100,48,0,7);x.fill();x.globalCompositeOperation='source-over';
+ const g=getComputedStyle(document.body).color;x.fillStyle=g;x.font='11px sans-serif';e.slice(0,8).forEach(([k,v],i)=>{x.fillStyle=COL[i%8];x.fillRect(205,12+i*22,10,10);x.fillStyle=g;x.fillText(k.slice(0,12)+' '+Math.round(v/T*100)+'%',220,21+i*22)})}
+function bars(id,vals){const c=$('#'+id);if(!c)return;const x=c.getContext('2d');c.width=340;c.height=180;const M=Math.max(...vals,1),g=getComputedStyle(document.body).color;
+ vals.forEach((v,i)=>{const h=v/M*130;x.fillStyle=COL[0];x.fillRect(8+i*27,150-h,18,h);x.fillStyle=g;x.font='10px sans-serif';x.fillText('JFMAMJJASOND'[i],13+i*27,168)})}
+/* views */
+const txRow=t=>`<div class="tx"><div><b>${t.note||t.cat}</b><div class="m">${t.date} · ${t.cat} · ${(db.fam.find(f=>f.id===t.by)||{}).name||'—'}${t.src?' · SMS':''}</div></div><div><span class="amt">${inr(t.amt)}</span><button class="s" onclick="editTx('${t.id}')">Edit</button></div></div>`;
+const catList=d=>Object.entries(d).sort((a,b)=>b[1]-a[1]).map(([k,v],i)=>`<div class="m"><span class="dot" style="background:${COL[i%8]}"></span>${k}: <b>${inr(v)}</b></div>`).join('');
+function reg(){
+ $('#nav').innerHTML='';$('#app').innerHTML=`<div class="card"><h3>Welcome! Register your family</h3><input id="fn" placeholder="Family name"><div id="mem"></div><button class="s" onclick="addM()">+ Add member</button><button onclick="doReg()">Start</button>${NP?'<button class="s" onclick="joinFam()">Already registered on another phone? Join by Wi-Fi</button>':''}<div class="m" id="err" style="color:var(--r)"></div></div>`;
+ addM('Head');addM('Wife')}
+function addM(r){const d=document.createElement('div');d.className='row mrow';d.innerHTML=`<input placeholder="Name"><select>${['Head','Wife','Husband','Son','Daughter','Father','Mother','Other'].map(x=>`<option ${x==r?'selected':''}>${x}</option>`).join('')}</select><input type="number" placeholder="Age" style="max-width:70px"><input placeholder="Phone">`;$('#mem').append(d)}
+function doReg(){const fam=[...document.querySelectorAll('.mrow')].map(r=>{const i=r.querySelectorAll('input,select');return{id:uid(),name:i[0].value.trim(),rel:i[1].value,age:i[2].value,ph:i[3].value}}).filter(f=>f.name);
+ if(!$('#fn').value.trim()||!fam.length||!fam.some(f=>f.rel=='Head'||f.rel=='Husband')){$('#err').textContent='Enter family name and at least the head of family.';return}
+ db={name:$('#fn').value.trim(),fam,me:fam[0].id,tx:[],del:{},budget:0};save();render()}
+function form(){const t=edit?db.tx.find(x=>x.id===edit):{date:today(),amt:'',cat:CATS[0],note:'',by:db.me};
+ return `<div class="card"><h3>${edit?'Edit':'Add'} expense</h3><div class="row"><input id="d" type="date" value="${t.date}"><input id="a" type="number" inputmode="decimal" placeholder="Amount ₹" value="${t.amt}"></div>
+ <select id="c">${CATS.map(c=>`<option ${c==t.cat?'selected':''}>${c}</option>`).join('')}</select><input id="n" placeholder="Note / merchant" value="${t.note}" oninput="auto(this)">
+ <select id="b">${db.fam.map(f=>`<option value="${f.id}" ${f.id==t.by?'selected':''}>${f.name} (${f.rel})</option>`).join('')}</select>
+ <button onclick="saveTx()">${edit?'Update':'Save'}</button>${edit?`<button class="s" onclick="edit=null;render()">Cancel</button><button class="d" onclick="delTx()">Delete</button>`:''}</div>`}
+function auto(el){if(edit)return;const c=classify(el.value);if(!c.startsWith('IGNORE')&&c!='Other')$('#c').value=c}
+function saveTx(){const t={id:edit||uid(),date:$('#d').value,amt:parseFloat($('#a').value),cat:$('#c').value,note:$('#n').value.trim(),by:$('#b').value,ref:'',upd:Date.now()};
+ if(!t.date||!(t.amt>0)){flash='Enter a valid date and amount.';return render()}
+ if(edit){Object.assign(db.tx.find(x=>x.id===edit),t);save();flash='Updated.'}
+ else if(addTx(t))flash='Saved.';else flash='⚠ Duplicate entry skipped (same date, amount & note already exists).';
+ edit=null;tab=edit?tab:'month';ym=t.date.slice(0,7);render()}
+function editTx(id){edit=id;tab='add';render()}
+function delTx(){db.del[edit]=Date.now();save();edit=null;flash='Deleted.';tab='month';render()}
+function dash(){const L=live(),m=L.filter(t=>t.date.startsWith(ym)),tot=m.reduce((s,t)=>s+t.amt,0),pm=new Date(ym+'-01');pm.setMonth(pm.getMonth()-1);
+ const pt=L.filter(t=>t.date.startsWith(pm.toISOString().slice(0,7))).reduce((s,t)=>s+t.amt,0),mem=sumBy(m,t=>(db.fam.find(f=>f.id===t.by)||{name:'—'}).name);
+ return `<div class="card"><div class="m">${db.name} · ${ym}</div><div class="big">${inr(tot)}</div><div class="m">${pt?(tot>=pt?'▲':'▼')+' '+Math.abs(Math.round((tot-pt)/pt*100))+'% vs last month':'No previous month data'}</div>
+ ${db.budget?`<div class="bar" style="margin-top:8px"><i style="width:${Math.min(100,tot/db.budget*100)}%;background:${tot>db.budget?'var(--r)':'var(--p)'}"></i></div><div class="m">Budget ${inr(db.budget)} · left ${inr(Math.max(0,db.budget-tot))}</div>`:''}</div>
+ <div class="card"><h3>By category</h3><canvas id="p1"></canvas></div>
+ <div class="card"><h3>By member</h3>${Object.entries(mem).map(([k,v])=>`<div class="m">${k} <b>${inr(v)}</b></div><div class="bar"><i style="width:${v/tot*100}%"></i></div>`).join('')||'<div class="m">No expenses yet</div>'}</div>
+ <div class="card"><h3>Recent</h3>${m.sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5).map(txRow).join('')||'<div class="m">Nothing yet. Tap Add.</div>'}</div>`}
+function month(){const m=live().filter(t=>t.date.startsWith(ym)).sort((a,b)=>b.date.localeCompare(a.date)||b.upd-a.upd),tot=m.reduce((s,t)=>s+t.amt,0);
+ return `<div class="card"><input type="month" value="${ym}" onchange="ym=this.value;render()"><div class="big">${inr(tot)}</div><canvas id="p1"></canvas>${catList(sumBy(m,t=>t.cat))}</div><div class="card"><input placeholder="Search…" oninput="q(this.value)"><div id="lst">${m.map(txRow).join('')||'<div class="m">No expenses this month.</div>'}</div></div>`}
+function q(v){const m=live().filter(t=>t.date.startsWith(ym)&&(t.note+t.cat).toLowerCase().includes(v.toLowerCase()));$('#lst').innerHTML=m.map(txRow).join('')}
+function year(){const L=live().filter(t=>t.date.startsWith(yr)),mo=Array(12).fill(0);L.forEach(t=>mo[+t.date.slice(5,7)-1]+=t.amt);
+ return `<div class="card"><input type="number" value="${yr}" onchange="yr=this.value;render()"><div class="big">${inr(mo.reduce((a,b)=>a+b,0))}</div><div class="m">Monthly trend</div><canvas id="b1"></canvas></div><div class="card"><h3>Category split</h3><canvas id="p1"></canvas>${catList(sumBy(L,t=>t.cat))}</div>`}
+function sms(){return `<div class="card"><h3>Add from SMS</h3><div class="m">Paste bank/UPI SMS (separate several with a blank line). Debits are classified; investments & transfers are ignored; duplicates are blocked by reference/amount/date.</div><textarea id="s" rows="6">${smsTxt}</textarea><button onclick="doSMS()">Import pasted SMS</button>${NP?'<button class="s" onclick="scanSms()">Scan inbox now (also runs automatically)</button>':''}<div class="m">Tip (Android): select an SMS → Share → IA Expenses to import it directly once the app is installed.</div></div>`}
+function doSMS(){const parts=$('#s').value.split(/\n\s*\n/).filter(x=>x.trim());let a=0,d=0,i=[];parts.forEach(p=>{const r=parseSMS(p);if(r.skip)i.push(r.skip);else if(addTx(r.t))a++;else d++});
+ smsTxt='';flash=`Added ${a}, duplicates ${d}, ignored ${i.length}${i.length?' ('+[...new Set(i)].join(', ')+')':''}.`;tab=a?'month':'sms';render()}
+function fam(){return `<div class="card"><h3>${db.name}</h3>${db.fam.map(f=>`<div class="tx"><div><b>${f.name}</b><div class="m">${f.rel} · ${f.age||'—'} yrs ${f.ph||''}</div></div>${f.id==db.me?'<span class="m">This device</span>':`<button class="s" onclick="db.me='${f.id}';save();render()">I am this</button>`}</div>`).join('')}</div>
+ <div class="card"><h3>Monthly budget</h3><input id="bg" type="number" placeholder="₹" value="${db.budget||''}"><button onclick="db.budget=+$('#bg').value;save();flash='Budget saved.';render()">Save budget</button></div>
+ <div class="card"><h3>Sync with family</h3><div class="m">Send your sync file to another phone via Bluetooth / Nearby Share / WhatsApp / same Wi-Fi, then import it there. Entries are merged; duplicates are ignored; latest edit wins.</div>${NP?'<button onclick="syncWifi()">Sync now (same Wi-Fi / hotspot)</button>':''}<button class="s" onclick="exp()">Share / export sync file</button><input type="file" id="f" accept=".json" onchange="imp(this.files[0])"></div>
+ <div class="card"><h3>App update</h3><div class="m">Version ${VER}. Updates deploy automatically when code is pushed to GitHub.</div><button onclick="upd()">Check for update</button></div>`}
+async function exp(){const f=new File([JSON.stringify(db)],`ia-sync-${today()}.json`,{type:'application/json'});
+ if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:'IA Expenses sync'});return}catch(e){}}
+ const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;a.click()}
+function imp(f){if(!f)return;f.text().then(s=>{try{const r=merge(JSON.parse(s));flash=`Synced: ${r.n} new, ${r.u} updated.`}catch(e){flash='Invalid sync file.'}render()})}
+function upd(){if(NP)return apkUpd();if(!swReg){flash='Updates need the installed/hosted version.';return render()}swReg.update().then(()=>{flash=swReg.waiting?'Update ready — reloading…':'You are on the latest version.';if(swReg.waiting){swReg.waiting.postMessage('skip')}render()})}
+function render(){if(!db)return reg();
+ const T=[['dash','🏠','Home'],['month','📅','Month'],['add','➕','Add'],['year','📊','Year'],['sms','💬','SMS'],['fam','👪','Family']];
+ $('#nav').innerHTML=T.map(([k,i,l])=>`<a class="${tab==k?'on':''}" onclick="edit=null;tab='${k}';render()">${i}<br>${l}</a>`).join('');
+ $('#app').innerHTML=(flash?`<div class="card">${flash}</div>`:'')+({dash,month,add:form,year,sms,fam}[tab])();flash='';
+ pie('p1',tab=='year'?sumBy(live().filter(t=>t.date.startsWith(yr)),t=>t.cat):sumBy(live().filter(t=>t.date.startsWith(ym)),t=>t.cat));
+ if(tab=='year'){const mo=Array(12).fill(0);live().filter(t=>t.date.startsWith(yr)).forEach(t=>mo[+t.date.slice(5,7)-1]+=t.amt);bars('b1',mo)}}
+const ld=ms=>new Date(ms-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+async function scanSms(q){if(!NP||!db)return;try{const r=await NP.readSms({since:db.smsTs||Date.now()-30*864e5});let a=0,d=0,mx=db.smsTs||0;
+ for(const m of r.msgs){mx=Math.max(mx,m.date);const p=parseSMS(m.body,ld(m.date));if(p.t){if(addTx(p.t))a++;else d++}}
+ db.smsTs=mx;save();if(a||!q){flash=`SMS scan: ${a} added, ${d} duplicates skipped.`;render()}}catch(e){if(!q){flash='SMS permission is needed.';render()}}}
+async function syncWifi(){flash='Searching family devices…';render();try{const r=await NP.syncNow({json:JSON.stringify(db)});let n=0,u=0;r.peers.forEach(p=>{const m=merge(JSON.parse(p));n+=m.n;u+=m.u});
+ flash=r.peers.length?`Synced with ${r.peers.length} device(s): ${n} new, ${u} updated.`:'No other device found. Open the app on both phones, same Wi-Fi/hotspot.'}catch(e){flash='Sync failed.'}render()}
+async function joinFam(){db={name:'',fam:[],me:null,tx:[],del:{},budget:0};await syncWifi();if(!db.fam.length){db=null;alert('No registered device found on this network.');}render()}
+async function apkUpd(){try{const r=await(await fetch('https://api.github.com/repos/'+REPO+'/releases/latest')).json(),v=(r.tag_name||'').replace(/^v/,'');
+ if(v&&v!==VER&&r.assets&&r.assets[0]){if(confirm('Version '+v+' is available. Download and install?'))window.open(r.assets[0].browser_download_url,'_system')}else flash='You have the latest version ('+VER+').'}catch(e){flash='Could not check for updates (internet needed).'}render()}
+function boot(){if(!NP)return;NP.start().catch(()=>{});NP.addListener('peerData',e=>{if(db){try{merge(JSON.parse(e.json));render()}catch(x){}}});
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)scanSms(true)});scanSms(true)}
+const sp=new URLSearchParams(location.search).get('text');if(sp){smsTxt=sp;tab='sms'}
+if('serviceWorker'in navigator&&!NP)navigator.serviceWorker.register('sw.js').then(r=>{swReg=r;r.addEventListener('updatefound',()=>{const w=r.installing;w&&w.addEventListener('statechange',()=>{if(w.state=='installed'&&navigator.serviceWorker.controller){flash='New version available — tap Family → Check for update.';render()}})})}).catch(()=>{});
+let rl;navigator.serviceWorker&&navigator.serviceWorker.addEventListener('controllerchange',()=>{if(rl)return;rl=1;location.reload()});
+render();boot();
+</script></body></html>
